@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import https from "node:https";
 
 const API_KEY = process.env.TRELLO_API_KEY!;
 const TOKEN = process.env.TRELLO_TOKEN!;
@@ -13,21 +14,27 @@ async function trelloFetch(path: string, method = "GET", body?: Record<string, u
   const separator = path.includes("?") ? "&" : "?";
   const url = `https://api.trello.com/1${path}${separator}key=${API_KEY}&token=${TOKEN}`;
 
-  const options: RequestInit = { method, headers: { "Content-Type": "application/json" } };
-  if (body) options.body = JSON.stringify(body);
-
-  const res = await fetch(url, options);
-  const text = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`Trello API ${res.status}: ${text}`);
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method, headers: { "Content-Type": "application/json" } }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf-8");
+        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+          reject(new Error(`Trello API ${res.statusCode}: ${text}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(text));
+        } catch {
+          resolve(text);
+        }
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
 }
 
 function textResult(text: string, isError = false) {
